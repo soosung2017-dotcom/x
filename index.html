@@ -1,0 +1,378 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>골프 머니 계산기 – 최종본 (스킨 구간 색 v7 + 총 파/총 타수 + 리프레시)</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 16px; }
+table { border-collapse: collapse; width: 100%; max-width: 100%; }
+th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+input { width: 64px; text-align:center; box-sizing: border-box; }
+.name-input { width: 120px; }
+.controls { margin-bottom: 10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.move { font-weight: bold; }
+.note { font-size:12px; color:#555; margin-top:4px; }
+.pos { color: #0a7; font-weight: bold; }
+.neg { color: #d33; font-weight: bold; }
+/* 버디 / 이글 색상 */
+.birdie { background:#cfefff; }
+.eagle  { background:#ffe3b3; }
+/* 스킨 딴 구간 하이라이트 */
+.skinwin { background: #c08dff !important; color:#000; }
+/* 버튼 */
+button { padding: 6px 12px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<h2>골프 머니 계산기 (최종본 – 스킨 구간 색 v7 + 총 파/총 타수 + 리프레시)</h2>
+
+<div class="controls">
+  플레이어 수:
+  <select id="playerCount" onchange="setupPlayers()">
+    <option value="2">2명</option>
+    <option value="3">3명</option>
+    <option value="4" selected>4명</option>
+    <option value="5">5명</option>
+  </select>
+
+  기본 타당($): <input id="rate" value="2" oninput="calculateGame()">
+  버디($): <input id="birdie" value="5" oninput="calculateGame()">
+  이글($): <input id="eagle" value="20" oninput="calculateGame()">
+  스킨($): <input id="skin" value="2" oninput="calculateGame()">
+
+  스킨 배판:
+  <select id="skinCarryOn" onchange="calculateGame()">
+    <option value="1" selected>ON</option>
+    <option value="0">OFF</option>
+  </select>
+
+  스킨 최대홀:
+  <input id="skinMaxPayout" value="3" oninput="calculateGame()">
+
+  <button onclick="resetScores()">↺ 리프레시 (스코어 초기화)</button>
+  <button onclick="captureScreen()">📸 전체화면 스크린샷</button>
+</div>
+
+<div class="note">
+- 타당 배판: 전 홀에서 <b>버디 이상 / 트리플 이상 / 전원 같은 스코어</b>면, 다음 홀 타당이 2배가 됩니다.<br>
+- 스킨 최대홀: 스킨 이월이 한 번에 터질 수 있는 최대 홀 수입니다.<br>
+- 버디(파-1)는 하늘색, 이글(파-2 이하)는 주황색으로 표시됩니다.<br>
+- 스킨 색 표시 (v7, 순서 기준): <b>이번에 실제로 받은 스킨 개수만큼, 쌓인 순서대로(가장 먼저 쌓인 홀부터)</b> 보라색으로 표시됩니다.<br>
+  예) 1,2,3 이월 후 3번홀에서 이기면 → 1,2,3번홀 색칠.<br>
+      4,5 이월 후 5번홀에서 이기면 → 4,5번홀 색칠.<br>
+      6,7,8,9,10 이월 후 11번홀에서 최대 3개만 지급이면 → 6,7,8번홀 색칠, 9,10,11은 다음 이월로 남습니다.
+</div>
+
+<br>
+<div id="nameArea"></div>
+<br>
+
+<table id="scoreTable"></table>
+
+<h3>18홀 누적 머니 결과</h3>
+<div id="totalResult"></div>
+
+<h3>총 파 / 각 플레이어 총 타수</h3>
+<div id="strokeResult"></div>
+
+<script>
+let players = 4;
+
+function setupPlayers() {
+  players = parseInt(document.getElementById("playerCount").value);
+
+  let nameHTML = "";
+  for (let i = 0; i < players; i++) {
+    nameHTML += `Player ${i+1} 이름: <input class="name-input" id="name${i}" value="Player ${i+1}" oninput="updateHeader()"> `;
+  }
+  document.getElementById("nameArea").innerHTML = nameHTML;
+
+  buildTable();
+  calculateGame();
+}
+
+function updateHeader(){
+  buildTable(true);
+  calculateGame();
+}
+
+function buildTable(keepScore=false) {
+  const oldScores = {};
+  if(keepScore){
+    for(let h=1;h<=18;h++){
+      for(let i=0;i<players;i++){
+        const el = document.getElementById(`s${h}_${i}`);
+        if(el) oldScores[`s${h}_${i}`] = el.value;
+      }
+    }
+  }
+
+  const tbl = document.getElementById("scoreTable");
+  tbl.innerHTML = "";
+
+  let header = "<tr><th rowspan='2'>홀</th><th rowspan='2'>파</th>";
+  for (let i=0;i<players;i++){
+    const nm = document.getElementById("name"+i)?.value || ("Player "+(i+1));
+    header += `<th colspan='2'>${nm}</th>`;
+  }
+  header += "<th rowspan='2'>이 홀 총 이동</th></tr>";
+
+  header += "<tr>";
+  for (let i=0;i<players;i++){
+    header += "<th>타수</th><th>금액</th>";
+  }
+  header += "</tr>";
+
+  tbl.innerHTML += header;
+
+  for (let h=1;h<=18;h++) {
+    let row = `<tr><td>${h}</td><td><input id="par${h}" value="4" oninput="calculateGame()"></td>`;
+    for (let i=0;i<players;i++) {
+      row += `<td><input id="s${h}_${i}" oninput="calculateGame()"></td>`;
+      row += `<td class="move" id="pm${h}_${i}">$0</td>`;
+    }
+    row += `<td class="move" id="move${h}">$0</td></tr>`;
+    tbl.innerHTML += row;
+  }
+
+  if(keepScore){
+    for(let key in oldScores){
+      const el=document.getElementById(key);
+      if(el) el.value=oldScores[key];
+    }
+  }
+}
+
+function clearSkinHighlights(){
+  for(let h=1; h<=18; h++){
+    for(let i=0; i<players; i++){
+      const cell = document.getElementById(`pm${h}_${i}`);
+      if(cell) cell.classList.remove("skinwin");
+    }
+  }
+}
+
+function calculateGame() {
+  if (!document.getElementById("rate")) return;
+
+  let baseRate = Number(document.getElementById("rate").value) || 0;
+  let birdie = Number(document.getElementById("birdie").value) || 0;
+  let eagle = Number(document.getElementById("eagle").value) || 0;
+  let skin = Number(document.getElementById("skin").value) || 0;
+  let carryOn = document.getElementById("skinCarryOn").value === "1";
+  let maxPayout = Math.max(1, Number(document.getElementById("skinMaxPayout").value || 1));
+
+  let totalMoney = new Array(players).fill(0);
+  let totalStrokes = new Array(players).fill(0);
+  let totalPar = 0;
+
+  clearSkinHighlights();
+
+  // 스킨 이월 관리용 큐: 아직 누구에게도 지급되지 않은 스킨이 쌓인 홀 번호들
+  let skinQueue = [];
+
+  let nextRateMult = 1;
+
+  for (let h=1;h<=18;h++) {
+    const rateMult = nextRateMult;
+    const holeRate = baseRate * rateMult;
+
+    let par = Number(document.getElementById("par"+h).value) || 0;
+    if (par > 0) totalPar += par;
+
+    let scores = [];
+
+    for (let i=0;i<players;i++) {
+      let input = document.getElementById(`s${h}_${i}`);
+      if (!input) continue;
+      let val = Number(input.value || 0);
+      scores.push(val);
+      if (val > 0) totalStrokes[i] += val;
+
+      input.classList.remove("birdie","eagle");
+      if(par > 0){
+        if(val === par-1) input.classList.add("birdie");
+        if(val <= par-2 && val > 0) input.classList.add("eagle");
+      }
+    }
+    if (scores.length < players) continue;
+
+    let holeMoney = new Array(players).fill(0);
+
+    // 1) 타수 차이
+    for (let i=0;i<players;i++) {
+      for (let j=i+1;j<players;j++) {
+        const diff = scores[i] - scores[j];
+        if (diff > 0) {
+          holeMoney[i] -= diff * holeRate;
+          holeMoney[j] += diff * holeRate;
+        } else if (diff < 0) {
+          holeMoney[i] += Math.abs(diff) * holeRate;
+          holeMoney[j] -= Math.abs(diff) * holeRate;
+        }
+      }
+    }
+
+    // 2) 버디 / 이글
+    if (par > 0){
+      scores.forEach((s, i) => {
+        if (s > 0 && s <= par - 2) { // 이글 이상
+          holeMoney[i] += eagle * (players - 1);
+          for (let j=0;j<players;j++) if (j!==i) holeMoney[j] -= eagle;
+        } else if (s === par - 1) { // 버디
+          holeMoney[i] += birdie * (players - 1);
+          for (let j=0;j<players;j++) if (j!==i) holeMoney[j] -= birdie;
+        }
+      });
+    }
+
+    // 3) 스킨
+    if (par > 0){
+      const positiveScores = scores.filter(x=>x>0);
+      if (positiveScores.length === players){
+        const min = Math.min(...positiveScores);
+        const winCount = scores.filter(v => v === min).length;
+
+        if (winCount === 1 && min <= par) {
+          const winnerIdx = scores.indexOf(min);
+
+          if (carryOn) {
+            // 이번 홀 스킨도 큐에 먼저 쌓는다
+            skinQueue.push(h);
+            const totalSkins = skinQueue.length;
+            const payable = Math.min(totalSkins, maxPayout);
+
+            if(payable > 0){
+              holeMoney[winnerIdx] += skin * (players - 1) * payable;
+              for (let j=0;j<players;j++) if (j!==winnerIdx) holeMoney[j] -= skin * payable;
+
+              // 가장 먼저 쌓인 홀부터 payable개만 색칠 & 큐에서 제거 (FIFO)
+              const paidHoles = skinQueue.slice(0, payable);
+              skinQueue = skinQueue.slice(payable);   // 나머지는 계속 이월
+              paidHoles.forEach(hh => {
+                const c = document.getElementById(`pm${hh}_${winnerIdx}`);
+                if(c) c.classList.add("skinwin");
+              });
+            }
+          } else {
+            // 이월 안 하는 경우: 현재 홀만 1개 스킨
+            holeMoney[winnerIdx] += skin * (players - 1);
+            for (let j=0;j<players;j++) if (j!==winnerIdx) holeMoney[j] -= skin;
+
+            const c = document.getElementById(`pm${h}_${winnerIdx}`);
+            if(c) c.classList.add("skinwin");
+          }
+        } else {
+          // 승자 없고 이월 켜져 있을 때만 큐에 추가
+          if (carryOn) {
+            skinQueue.push(h);
+          }
+        }
+      }
+    }
+
+    // 4) 금액 반영 (skinwin 클래스는 유지)
+    let moveSum = 0;
+    for (let i=0;i<players;i++){
+      const cell = document.getElementById(`pm${h}_${i}`);
+      if (!cell) continue;
+      const money = holeMoney[i];
+      cell.innerText = (money>=0?"+":"") + "$" + money.toFixed(0);
+      cell.classList.remove("pos","neg");
+      cell.classList.add(money>=0 ? "pos" : "neg");
+      cell.classList.add("move");
+      moveSum += Math.abs(money);
+      totalMoney[i] += money;
+    }
+
+    const moveCell = document.getElementById("move"+h);
+    if (moveCell) moveCell.innerText = "$" + (moveSum/2).toFixed(0);
+
+    // 5) 다음 홀 타당 배판 여부
+    let nextMult = 1;
+    if (par > 0){
+      const positiveScores2 = scores.filter(x=>x>0);
+      if (positiveScores2.length === players){
+        let hasBirdieOrBetter = scores.some(s => s>0 && s <= par-1);
+        let hasTripleOrWorse = scores.some(s => s >= par+3);
+        let allEqual = scores.every(s => s === scores[0] && s>0);
+        if (hasBirdieOrBetter || hasTripleOrWorse || allEqual) {
+          nextMult = 2;
+        }
+      }
+    }
+    nextRateMult = nextMult;
+  }
+
+  // 18홀 머니 결과
+  let resultHTML = "";
+  for (let i=0;i<players;i++) {
+    const nm = document.getElementById("name"+i)?.value || ("Player "+(i+1));
+    resultHTML += nm + ": $" + totalMoney[i].toFixed(0) + "<br>";
+  }
+  document.getElementById("totalResult").innerHTML = resultHTML;
+
+  // 총 파 / 총 타수
+  let strokeHTML = "총 파: " + totalPar + "<br>";
+  for (let i=0;i<players;i++){
+    const nm = document.getElementById("name"+i)?.value || ("Player "+(i+1));
+    strokeHTML += nm + " 총 타수: " + totalStrokes[i] + "<br>";
+  }
+  document.getElementById("strokeResult").innerHTML = strokeHTML;
+}
+
+function resetScores(){
+  // 파는 4로 초기화, 스코어/금액/색/결과 모두 리셋
+  for(let h=1; h<=18; h++){
+    const par = document.getElementById("par"+h);
+    if(par) par.value = 4;
+    for(let i=0; i<players; i++){
+      const s = document.getElementById(`s${h}_${i}`);
+      const pm = document.getElementById(`pm${h}_${i}`);
+      if(s){
+        s.value = "";
+        s.classList.remove("birdie","eagle");
+      }
+      if(pm){
+        pm.innerText = "$0";
+        pm.classList.remove("pos","neg","skinwin");
+        pm.classList.add("move");
+      }
+    }
+    const mv = document.getElementById("move"+h);
+    if(mv) mv.innerText = "$0";
+  }
+  document.getElementById("totalResult").innerHTML = "";
+  document.getElementById("strokeResult").innerHTML = "";
+}
+
+async function captureScreen(){
+  try{
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 } });
+    const track = stream.getVideoTracks()[0];
+    const imageCapture = new ImageCapture(track);
+    const bitmap = await imageCapture.grabFrame();
+
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = "golf_score_screenshot.png";
+    link.click();
+    track.stop();
+  } catch(e){
+    alert("스크린샷을 사용하려면 화면 공유 권한을 허용해 주세요.");
+  }
+}
+
+setupPlayers();
+</script>
+
+</body>
+</html>
